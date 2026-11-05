@@ -1,0 +1,10 @@
+.build/
+dist/
+tests/*-fixture-*/
+tests/*-test-*/
+*.tmp
+quota-state.json
+token-stats.json
+usage-cache.json
+settings.json
+*.log

@@ -1,0 +1,36 @@
+name: Build Windows installer
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build self-contained runtime installer
+        shell: powershell
+        run: ./build.ps1
+      - name: Test Node worker and statistics
+        shell: powershell
+        run: ./.build/app/runtime/node.exe --test tests/*.test.cjs
+      - name: Native smoke tests
+        shell: powershell
+        run: |
+          $exe=Join-Path $PWD '.build/app/Codex用量统计.exe'
+          foreach($test in @(@('--overlay-test', '.build/overlay'),@('--dpi-test', '.build/dpi.txt'),@('--statistics-test', '.build/statistics.txt'))) {
+            $process=Start-Process -FilePath $exe -ArgumentList $test -Wait -PassThru
+            if($process.ExitCode -ne 0){throw 'Native test failed'}
+          }
+      - name: Publish installer
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag='v1.0.0'
+          gh release view $tag *> $null
+          if($LASTEXITCODE -ne 0){gh release create $tag --target '${{ github.sha }}' --title 'Codex用量统计 v1.0.0' --notes 'Windows x64 安装包，内置 Node.js，无需额外安装 CLI。未签名；需已安装并登录 Codex 桌面客户端。'}
+          gh release upload $tag dist/CodexUsageUI-1.0.0-Setup-x64.exe dist/SHA256SUMS.txt --clobber
+          if($LASTEXITCODE -ne 0){throw 'Release upload failed'}
