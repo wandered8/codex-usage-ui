@@ -157,6 +157,7 @@ internal sealed partial class UsageCardManager : Form
              var data=new Dictionary<string,object>{{"value",0}};if(Percent(data,"value")!=0)throw new Exception("zero");data["value"]=101;if(Percent(data,"value")!=null)throw new Exception("bounds");data["value"]=null;if(Percent(data,"value")!=null)throw new Exception("unknown");
              using(var image=RingBitmap(null,null))image.Save(Path.Combine(arguments[1],"app-icon.png"));File.WriteAllText(Path.Combine(arguments[1],"manager-self-test.txt"),"PASS: settings, zero/unknown/bounds, static icon rendering. No startup registration.");return 0;}
             Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
+            if(arguments.Length==2&&arguments[0]=="--pricing-test"){PricingSelfTest(arguments[1]);return 0;}
             if(arguments.Length==2&&arguments[0]=="--overlay-test")
             {CodexRingOverlay.SelfTest(arguments[1]);return 0;}
             if(arguments.Length==2&&arguments[0]=="--dpi-test")
@@ -214,6 +215,6 @@ internal sealed partial class UsageCardManager : Form
              using(var form=new UsageCardManager(Array.IndexOf(arguments,"--tray")>=0,false,signal))Application.Run();mutex.ReleaseMutex();}
             return 0;
         }
-        catch(Exception error){if(arguments.Length==2&&arguments[0]=="--self-test")File.WriteAllText(Path.Combine(arguments[1],"manager-self-test.txt"),"FAIL: "+error.Message);else MessageBox.Show(error.Message,"Codex用量统计",MessageBoxButtons.OK,MessageBoxIcon.Error);return 1;}
+        catch(Exception error){if(arguments.Length==2&&arguments[0]=="--self-test")File.WriteAllText(Path.Combine(arguments[1],"manager-self-test.txt"),"FAIL: "+error.Message);else if(arguments.Length==2&&arguments[0]=="--overlay-test")File.WriteAllText(Path.Combine(arguments[1],"overlay-test.txt"),"FAIL: "+error.Message);else MessageBox.Show(error.Message,"Codex用量统计",MessageBoxButtons.OK,MessageBoxIcon.Error);return 1;}
     }
 }

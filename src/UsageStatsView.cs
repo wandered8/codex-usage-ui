@@ -23,7 +23,57 @@ internal sealed partial class UsageCardManager
     private int hoveredDay=-1;
     private readonly Color ink=Color.FromArgb(30,36,46), muted=Color.FromArgb(107,114,128), accent=Color.FromArgb(8,145,178);
 
-    // 窗口只展示本机 Token 统计，价格和侧栏设置均不在此页面。
+    // 2026-11-05 核对官方标准短上下文文本价格，单位 USD / 100万 Token。
+    // 来源：https://developers.openai.com/api/docs/pricing；不将其他模型或服务档位自动映射为这些价格。
+    private sealed class ModelPrice
+    {
+        public readonly decimal InputPerMillion,CachedInputPerMillion,OutputPerMillion;
+        public ModelPrice(decimal input,decimal cachedInput,decimal output){InputPerMillion=input;CachedInputPerMillion=cachedInput;OutputPerMillion=output;}
+    }
+    private static readonly Dictionary<string,ModelPrice> ModelPrices=new Dictionary<string,ModelPrice>(StringComparer.Ordinal) {
+        {"gpt-6.1-sol",new ModelPrice(2m,0.10m,10m)},
+        {"gpt-6.1-terra",new ModelPrice(1m,0.05m,5m)},
+        {"gpt-6-astra",new ModelPrice(10m,1m,50m)},
+        {"gpt-6-luna",new ModelPrice(0.10m,0.01m,0.50m)},
+        {"gpt-5.6-sol",new ModelPrice(4m,0.40m,20m)}
+    };
+    // 输入已包含缓存命中：仅未命中部分按普通输入价格计算，未知或异常数据保留为空。
+    private static decimal? EstimateCost(TokenRow row)
+    {
+        ModelPrice price;
+        if(row.model==null||!ModelPrices.TryGetValue(row.model,out price)||row.input<0||row.output<0||row.cached<0||row.cached>row.input)return null;
+        return ((row.input-row.cached)*price.InputPerMillion+row.cached*price.CachedInputPerMillion+row.output*price.OutputPerMillion)/1000000m;
+    }
+    private static string Money(decimal amount,int decimals)
+    {
+        decimal minimum=decimals==2?0.01m:0.0001m;
+        return amount>0&&amount<minimum?"<$"+minimum.ToString("F"+decimals,CultureInfo.InvariantCulture):"$"+amount.ToString("F"+decimals,CultureInfo.InvariantCulture);
+    }
+    // 星号表示只有已知价格的模型被计入，不将未知模型当作零费用。
+    private static string CostSummary(IEnumerable<TokenRow> rows,int decimals)
+    {
+        var costs=rows.Select(EstimateCost).ToList();
+        if(costs.Count>0&&costs.All(value=>!value.HasValue))return "待定价";
+        return Money(costs.Where(value=>value.HasValue).Sum(value=>value.Value),decimals)+(costs.Any(value=>!value.HasValue)?" *":"");
+    }
+    private static string PriceDetails(TokenRow row)
+    {
+        decimal? cost=EstimateCost(row);if(!cost.HasValue)return "该模型暂无已核验官方价格，或计数异常；未计入金额合计。";
+        var price=ModelPrices[row.model];
+        return row.model+" · 标准短上下文估算 USD\n普通输入："+(row.input-row.cached).ToString("N0")+" × $"+price.InputPerMillion+" / 1M\n缓存输入："+row.cached.ToString("N0")+" × $"+price.CachedInputPerMillion+" / 1M\n输出："+row.output.ToString("N0")+" × $"+price.OutputPerMillion+" / 1M\n合计："+Money(cost.Value,4)+"\n价格核验：2026-11-05；非订阅实际扣费。";
+    }
+    // 聚合日志不含完整计费档位和缓存写入信息，因此展示标准价格估算而非账单。
+    private void ShowPricingDetails()
+    {
+        string text="官方标准短上下文文本价格，USD / 100万 Token\n价格核验：2026-11-05\n\n模型：普通输入 / 缓存输入 / 输出\n";
+        foreach(var item in ModelPrices)text+=item.Key+"：$"+item.Value.InputPerMillion+" / $"+item.Value.CachedInputPerMillion+" / $"+item.Value.OutputPerMillion+"\n";
+        text+="\n所选时段按模型汇总：\n";
+        foreach(var group in selectedRows.GroupBy(row=>row.model))text+=group.Key+"："+CostSummary(group,4)+"\n";
+        text+="\n合计："+CostSummary(selectedRows,4)+"\n* 表示部分模型未计价，未知价格不按零处理。\n\n按当前价格折算历史 Token，不代表订阅实际扣费。\n普通输入 = 输入 - 缓存命中；缓存输入不重复计费。\n不含长上下文、Fast/Ultrafast、地区溢价、缓存写入及工具费用。\n\nhttps://developers.openai.com/api/docs/pricing";
+        MessageBox.Show(this,text,"计价说明 · USD 估算",MessageBoxButtons.OK,MessageBoxIcon.Information);
+    }
+
+    // 本机 Token 与按模型估算的 USD 金额共用日期筛选；侧栏设置不在此页面。
     private void InitializeStatistics()
     {
         AutoScaleMode=AutoScaleMode.None;
@@ -40,14 +90,18 @@ internal sealed partial class UsageCardManager
             var metric=new StatsTabButton {Text=new[]{"总量","输入","输出"}[i],Selected=()=>metricBox.SelectedIndex==index};metric.SetBounds(678+i*66,248,64,30);metric.Click+=(sender,args)=>metricBox.SelectedIndex=index;Controls.Add(metric);
         }
         var sync=new StatsTabButton {Text="立即同步",Selected=()=>true};sync.SetBounds(804,30,108,36);
+        var pricing=new LinkLabel {Text="计价说明",AutoSize=true,LinkColor=Color.FromArgb(15,118,110),Font=new Font("Microsoft YaHei UI",8.5f),AccessibleName="查看官方单价、分模型金额及估算说明"};pricing.SetBounds(360,61,100,22);pricing.LinkClicked+=(sender,args)=>ShowPricingDetails();Controls.Add(pricing);
         sync.Click+=(sender,args)=>{try{if(worker!=null&&!worker.HasExited){worker.StandardInput.WriteLine("scan");worker.StandardInput.Flush();status.Text="正在同步本机记录…";}else status.Text="采集进程尚未就绪，正在重试。";}catch{status.Text="未能请求同步，请重新打开托盘程序。";}};
         table.SetBounds(40,523,860,136);table.ReadOnly=true;table.AllowUserToAddRows=false;table.AllowUserToDeleteRows=false;table.AllowUserToResizeRows=false;table.RowHeadersVisible=false;
         table.BackgroundColor=Color.White;table.BorderStyle=BorderStyle.None;table.EnableHeadersVisualStyles=false;table.ColumnHeadersDefaultCellStyle.BackColor=Color.FromArgb(248,250,252);table.ColumnHeadersDefaultCellStyle.ForeColor=muted;
+        // 表头获得焦点或参与排序时保持浅色，避免继承系统蓝色选中背景。
+        table.ColumnHeadersDefaultCellStyle.SelectionBackColor=table.ColumnHeadersDefaultCellStyle.BackColor;
+        table.ColumnHeadersDefaultCellStyle.SelectionForeColor=table.ColumnHeadersDefaultCellStyle.ForeColor;
         table.ColumnHeadersDefaultCellStyle.Font=new Font("Microsoft YaHei UI",9);table.ColumnHeadersDefaultCellStyle.Padding=new Padding(8,0,8,0);table.ColumnHeadersHeight=32;table.ColumnHeadersHeightSizeMode=DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
         table.DefaultCellStyle.Font=new Font("Microsoft YaHei UI",9);table.DefaultCellStyle.Padding=new Padding(8,0,8,0);table.DefaultCellStyle.SelectionBackColor=Color.FromArgb(234,247,244);table.DefaultCellStyle.SelectionForeColor=ink;
         table.AlternatingRowsDefaultCellStyle.BackColor=Color.FromArgb(252,253,254);table.GridColor=Color.FromArgb(239,242,246);table.CellBorderStyle=DataGridViewCellBorderStyle.SingleHorizontal;table.ColumnHeadersBorderStyle=DataGridViewHeaderBorderStyle.None;
         table.AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill;table.RowTemplate.Height=34;table.SelectionMode=DataGridViewSelectionMode.FullRowSelect;
-        foreach(string name in new[]{"日期","模型","输入","输出","缓存命中","Token 合计"})table.Columns.Add(name,name);
+        foreach(string name in new[]{"日期","模型","输入","输出","缓存命中","Token 合计","估算 USD"})table.Columns.Add(name,name);
         table.Columns[0].FillWeight=90;table.Columns[1].FillWeight=160;
         for(int i=2;i<table.Columns.Count;i++){table.Columns[i].DefaultCellStyle.Alignment=DataGridViewContentAlignment.MiddleRight;table.Columns[i].HeaderCell.Style.Alignment=DataGridViewContentAlignment.MiddleRight;table.Columns[i].DefaultCellStyle.Font=new Font("Consolas",10);}
         status.SetBounds(38,681,864,22);status.BackColor=BackColor;status.Font=new Font("Microsoft YaHei UI",8.5f);status.ForeColor=muted;status.Text="本机近 30 天会话记录 · 正在建立统计";
@@ -105,7 +159,7 @@ internal sealed partial class UsageCardManager
         hoveredDay=-1;chartTooltip.Hide(this);
         string first=DateTime.Today.AddDays(1-Days).ToString("yyyy-MM-dd");
         selectedRows=(statistics==null?new TokenRow[0]:statistics.rows).Where(row=>String.CompareOrdinal(row.day,first)>=0&&String.CompareOrdinal(row.day,DateTime.Today.ToString("yyyy-MM-dd"))<=0).ToList();
-        table.Rows.Clear();foreach(var row in selectedRows.OrderByDescending(row=>row.day).ThenBy(row=>row.model))table.Rows.Add(row.day,row.model,row.input.ToString("N0"),row.output.ToString("N0"),row.cached.ToString("N0"),row.total.ToString("N0"));
+        table.Rows.Clear();foreach(var row in selectedRows.OrderByDescending(row=>row.day).ThenBy(row=>row.model)){decimal? cost=EstimateCost(row);int index=table.Rows.Add(row.day,row.model,row.input.ToString("N0"),row.output.ToString("N0"),row.cached.ToString("N0"),row.total.ToString("N0"),cost.HasValue?Money(cost.Value,4):"待定价");table.Rows[index].Cells[6].ToolTipText=PriceDetails(row);}
         table.ClearSelection();table.CurrentCell=null;
         if(statistics!=null)status.Text="本机记录，非跨设备账户总量 · "+DateTimeOffset.FromUnixTimeMilliseconds(statistics.updatedAt).ToLocalTime().ToString("MM/dd HH:mm:ss")+" 更新"+(statistics.unreadableFiles>0?" · 部分文件无法读取":"");
         Invalidate();
@@ -119,15 +173,15 @@ internal sealed partial class UsageCardManager
         DrawLabel(g,"用量统计",76,24,20,ink,true);DrawLabel(g,"TOKEN ANALYTICS  /  本机消耗概览",78,61,8.5f,muted,false);
         Surface(g,new RectangleF(547,28,242,40),10,Color.FromArgb(235,239,245),false);
         long input=selectedRows.Sum(row=>row.input),output=selectedRows.Sum(row=>row.output),cached=selectedRows.Sum(row=>row.cached),total=selectedRows.Sum(row=>row.total);
-        string[] values={Compact(total),Compact(input),Compact(output),input>0?(100d*cached/input).ToString("0.0")+"%":"—"};
-        string[] labels={"Token 总量","输入 Token","输出 Token","缓存命中率"};
-        string[] captions={"所选时段已记录用量","包含缓存命中 Token","模型生成的 Token","缓存命中 / 输入 Token"};
-        Color[] colors={Color.FromArgb(13,148,136),Color.FromArgb(71,116,224),Color.FromArgb(145,91,210),Color.FromArgb(217,140,46)};
-        for(int i=0;i<4;i++)
+        string[] values={Compact(total),Compact(input),Compact(output),input>0?(100d*cached/input).ToString("0.0")+"%":"—",CostSummary(selectedRows,2)};
+        string[] labels={"Token 总量","输入 Token","输出 Token","缓存命中率","估算金额 · USD"};
+        string[] captions={"所选时段已记录用量","包含缓存命中 Token","模型生成的 Token","缓存命中 / 输入 Token",selectedRows.Any(row=>!EstimateCost(row).HasValue)?"* 部分模型未计价":"API 标准价 · 非实际扣费"};
+        Color[] colors={Color.FromArgb(13,148,136),Color.FromArgb(71,116,224),Color.FromArgb(145,91,210),Color.FromArgb(217,140,46),Color.FromArgb(15,118,110)};
+        for(int i=0;i<5;i++)
         {
-            int x=28+i*225;Surface(g,new RectangleF(x,112,209,104),14,i==0?Color.FromArgb(235,248,245):Color.White,true);
+            int x=28+i*180;Surface(g,new RectangleF(x,112,164,104),14,i==0?Color.FromArgb(235,248,245):Color.White,true);
             using(var brush=new SolidBrush(colors[i]))g.FillEllipse(brush,x+18,130,6,6);
-            DrawLabel(g,labels[i],x+32,123,9.5f,muted,false);DrawLabel(g,statistics==null?"—":values[i],x+17,144,25,ink,true);
+            DrawLabel(g,labels[i],x+32,123,9.5f,muted,false);DrawLabel(g,statistics==null?"—":values[i],x+17,144,i==4?21:22,ink,true);
             DrawLabel(g,captions[i],x+19,190,8,muted,false);
         }
         Surface(g,new RectangleF(28,234,884,230),14,Color.White,true);
@@ -162,7 +216,7 @@ internal sealed partial class UsageCardManager
     private static void DrawLabel(Graphics graphics,string text,float x,float y,float size,Color color,bool bold)
     {using(var font=new Font("Microsoft YaHei UI",size*96f/72f,bold?FontStyle.Bold:FontStyle.Regular,GraphicsUnit.Pixel))using(var brush=new SolidBrush(color))graphics.DrawString(text,font,brush,x,y);}
 
-    // 按柱所在日期命中，展示精确值；不会将费用或请求数混入 Token 统计。
+    // 按柱所在日期展示精确 Token 和当日 USD 估算，纵轴仍保持 Token 口径。
     private void ShowChartTooltip(object sender,MouseEventArgs args)
     {
         float x=args.X/statisticsScale,y=args.Y/statisticsScale;
@@ -171,14 +225,35 @@ internal sealed partial class UsageCardManager
         if(day<0||day>=Days||statistics==null)return;
         string date=DateTime.Today.AddDays(day+1-Days).ToString("yyyy-MM-dd");var rows=selectedRows.Where(row=>row.day==date).ToList();
         long total=rows.Sum(row=>row.total),input=rows.Sum(row=>row.input),output=rows.Sum(row=>row.output),cached=rows.Sum(row=>row.cached);
-        string text=date+"\nToken 总量："+total.ToString("N0")+"\n输入："+input.ToString("N0")+"\n输出："+output.ToString("N0")+"\n缓存命中："+cached.ToString("N0");
+        string text=date+"\nToken 总量："+total.ToString("N0")+"\n输入："+input.ToString("N0")+"\n输出："+output.ToString("N0")+"\n缓存命中："+cached.ToString("N0")+"\n估算金额："+CostSummary(rows,4)+"（API 标准价，非扣费）";
         chartTooltip.Show(text,this,Math.Min(args.X+16,ClientSize.Width-(int)(210*statisticsScale)),Math.Max(0,args.Y-(int)(120*statisticsScale)),15000);
+    }
+
+    // 计价回归：覆盖缓存拆分、模型差异、未知模型、异常计数及小金额显示。
+    private static void PricingSelfTest(string report)
+    {
+        var sol=new TokenRow {model="gpt-6.1-sol",input=1000000,cached=800000,output=100000};
+        var terra=new TokenRow {model="gpt-6.1-terra",input=1000000,cached=800000,output=100000};
+        var unknown=new TokenRow {model="not-priced",input=1000000};
+        if(EstimateCost(sol)!=1.48m||EstimateCost(terra)!=0.74m)throw new Exception("缓存拆分或分模型单价错误");
+        if(CostSummary(new[]{sol,terra},4)!="$2.2200")throw new Exception("模型合计错误");
+        if(EstimateCost(new TokenRow {model="gpt-6.1-sol",input=1000000,cached=1000000})!=0.10m)throw new Exception("缓存重复计费");
+        if(EstimateCost(new TokenRow {model="gpt-6.1-sol",input=1000000,output=100000})!=3m)throw new Exception("未缓存输入计价错误");
+        if(EstimateCost(new TokenRow {model="gpt-6.1-sol"})!=0m)throw new Exception("零 Token 计价错误");
+        if(EstimateCost(unknown)!=null||CostSummary(new[]{unknown},4)!="待定价"||CostSummary(new[]{sol,unknown},4)!="$1.4800 *")throw new Exception("未知价格冒充零费用");
+        if(EstimateCost(new TokenRow {model="gpt-6.1-sol",input=1,cached=2})!=null||EstimateCost(new TokenRow {model="gpt-6.1-sol",input=-1})!=null)throw new Exception("异常计数未拦截");
+        if(Money(EstimateCost(new TokenRow {model="gpt-6.1-sol",input=1}).Value,4)!="<$0.0001")throw new Exception("小金额显示为零");
+        using(var form=new UsageCardManager(true,true,null)) {
+            if(form.table.Columns.Count!=7||form.table.Rows[0].Cells[6].ToolTipText.IndexOf("普通输入",StringComparison.Ordinal)<0)throw new Exception("金额列或计价详情缺失");
+            form.periodBox.SelectedIndex=0;if(form.selectedRows.Count!=1||CostSummary(form.selectedRows,4)=="待定价")throw new Exception("金额未跟随日期筛选");
+        }
+        File.WriteAllText(report,"PASS: model rates, input/cache/output split, all-cache, no-cache, zero, unknown/partial pricing, invalid counts, tiny amounts, cost column/details and date filtering.");
     }
 
     // 预览数据仅用于离屏布局检查，不会写入真实统计文件。
     private void LoadPreviewStatistics()
     {
-        var rows=new List<TokenRow>();for(int i=0;i<7;i++)rows.Add(new TokenRow {day=DateTime.Today.AddDays(i-6).ToString("yyyy-MM-dd"),model="示例模型",input=1000000+i*230000,output=100000+i*10000,cached=800000+i*180000,total=1100000+i*240000});
+        var rows=new List<TokenRow>();for(int i=0;i<7;i++)rows.Add(new TokenRow {day=DateTime.Today.AddDays(i-6).ToString("yyyy-MM-dd"),model=i%2==0?"gpt-6.1-sol":"gpt-6.1-terra",input=1000000+i*230000,output=100000+i*10000,cached=800000+i*180000,total=1100000+i*240000});
         statistics=new TokenSnapshot {rows=rows.ToArray(),updatedAt=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()};RenderStatistics();status.Text="界面预览 · 示例数据，非实际账户统计";
     }
 }

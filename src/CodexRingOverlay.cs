@@ -37,7 +37,7 @@ internal sealed class CodexRingOverlay : IDisposable
     public void UpdateValues(int? fiveHour,int? weekly,long? fiveResetAt,long? weekResetAt,int? resetCardCount,long? resetCardExpiresAt,long?[] expirations){if(five!=fiveHour||week!=weekly){five=fiveHour;week=weekly;dirty=true;detailsDirty=true;}if(fiveReset!=fiveResetAt||weekReset!=weekResetAt||resetCards!=resetCardCount||resetExpiry!=resetCardExpiresAt||!resetExpirations.SequenceEqual(expirations)){fiveReset=fiveResetAt;weekReset=weekResetAt;resetCards=resetCardCount;resetExpiry=resetCardExpiresAt;resetExpirations=expirations;detailsDirty=true;}}
     private void HideBoth(){if(!floating.IsDisposed)floating.Hide();if(!details.IsDisposed)details.Hide();hovering=false;}
 
-    // 只识别前台官方 Codex 的可见窗口；切换到其他应用即隐藏，避免悬浮在其他程序上。
+    // 失焦后保留已识别的客户端，浮层按其窗口层级排列，不因点击桌面而隐藏。
     private void Track()
     {
         if(disposed)return;
@@ -45,16 +45,14 @@ internal sealed class CodexRingOverlay : IDisposable
         if(details.IsDisposed){details=new RingWindow();detailsDirty=true;}
         if(!floating.IsHandleCreated){dirty=true;lastBounds=Rectangle.Empty;}
         IntPtr active=Native.GetAncestor(Native.GetForegroundWindow(),3);
-        // 前台句柄在布局/菜单切换时可能短暂为空，不把这一帧当成客户端消失。
-        if(active==IntPtr.Zero&&target!=IntPtr.Zero&&Native.IsWindowVisible(target)&&!Native.IsIconic(target))return;
+        if(target!=IntPtr.Zero&&!Native.IsWindow(target))target=IntPtr.Zero;
         if(active!=foreground||(target==IntPtr.Zero&&DateTime.UtcNow>=retryIdentity))
         {
-            if(active!=foreground){nativeControls.Clear();geometrySize=Size.Empty;nextScan=DateTime.MinValue;details.Hide();hovering=false;}
-            foreground=active;target=IntPtr.Zero;retryIdentity=DateTime.UtcNow.AddMilliseconds(300);
-            uint processId;Native.GetWindowThreadProcessId(active,out processId);
-            try{using(var process=Process.GetProcessById((int)processId)){string executable=process.MainModule.FileName;
-                if(executable.IndexOf(@"\OpenAI.Codex_",StringComparison.OrdinalIgnoreCase)>=0&&executable.EndsWith(@"\app\ChatGPT.exe",StringComparison.OrdinalIgnoreCase))target=active;}}
-            catch { }
+            IntPtr previous=target;
+            if(IsCodexWindow(active))target=active;
+            else if(target==IntPtr.Zero)target=FindCodexWindow();
+            if(target!=previous){nativeControls.Clear();geometrySize=Size.Empty;nextScan=DateTime.MinValue;details.Hide();hovering=false;lastBounds=Rectangle.Empty;}
+            foreground=active;retryIdentity=DateTime.UtcNow.AddSeconds(1);
         }
         Native.Rect nativeRect;Native.Point origin=new Native.Point();
         if(target==IntPtr.Zero||!Native.IsWindowVisible(target)||Native.IsIconic(target)||!Native.GetClientRect(target,out nativeRect)||!Native.ClientToScreen(target,ref origin))
@@ -76,8 +74,22 @@ internal sealed class CodexRingOverlay : IDisposable
         floating.Attach(target);
         if(bounds!=lastBounds){floating.Bounds=bounds;lastBounds=bounds;}
         if(!floating.Visible)floating.Show();
-        floating.EnsureVisible();
+        floating.EnsureVisible(details.Handle);
         TrackHover(bounds,dpi);
+    }
+
+    // 仅通过进程路径识别官方客户端，不依赖窗口标题或会话内容。
+    private static bool IsCodexWindow(IntPtr handle)
+    {
+        if(handle==IntPtr.Zero||!Native.IsWindow(handle))return false;
+        uint processId;Native.GetWindowThreadProcessId(handle,out processId);
+        try{using(var process=Process.GetProcessById((int)processId)){string executable=process.MainModule.FileName;return executable.IndexOf(@"\OpenAI.Codex_",StringComparison.OrdinalIgnoreCase)>=0&&executable.EndsWith(@"\app\ChatGPT.exe",StringComparison.OrdinalIgnoreCase);}}catch{return false;}
+    }
+    // 统计程序在后台启动时也能找到已打开的客户端；无客户端时最多每秒重试一次。
+    private static IntPtr FindCodexWindow()
+    {
+        foreach(var process in Process.GetProcessesByName("ChatGPT"))using(process){try{var handle=process.MainWindowHandle;if(handle!=IntPtr.Zero&&Native.IsWindowVisible(handle)&&IsCodexWindow(handle))return handle;}catch{}}
+        return IntPtr.Zero;
     }
 
     // 仅查询原生按钮几何，不读取名称、文本、聊天或账户；单个后台查询避免阻塞界面。
@@ -142,6 +154,8 @@ internal sealed class CodexRingOverlay : IDisposable
     private void TrackHover(Rectangle bounds,int dpi)
     {
         Point cursor=Cursor.Position;
+        // 圆环被其他窗口盖住时，不为其显示穿出遮挡窗口的悬浮卡片。
+        if(Native.GetAncestor(Native.WindowFromPoint(new Native.Point {X=cursor.X,Y=cursor.Y}),3)!=target){details.Hide();hovering=false;return;}
         if(!bounds.Contains(cursor)&&(!details.Visible||!details.Bounds.Contains(cursor))){details.Hide();hovering=false;return;}
         if(!hovering){hovering=true;hoverStarted=DateTime.UtcNow;}
         if((DateTime.UtcNow-hoverStarted).TotalMilliseconds<300)return;
@@ -149,7 +163,7 @@ internal sealed class CodexRingOverlay : IDisposable
         if(detailsDirty||details.Width!=(int)Math.Ceiling(236*dpi/96f)){using(var bitmap=RenderDetails(five,week,fiveReset,weekReset,resetCards,resetExpiry,resetExpirations,dpi))details.SetBitmap(bitmap);detailsDirty=false;}
         Rectangle work=Screen.FromRectangle(bounds).WorkingArea;
         details.Bounds=DetailBounds(bounds,details.Size,work,Math.Max(4,(int)(8*dpi/96f)));
-        details.Attach(target);if(!details.Visible)details.Show();details.EnsureVisible();
+        details.Attach(target);if(!details.Visible)details.Show();details.EnsureVisible(floating.Handle);
     }
     internal static Rectangle DetailBounds(Rectangle card,Size size,Rectangle work,int gap)
     {int x=card.Right+gap;if(x+size.Width>work.Right)x=card.Left-size.Width-gap;return new Rectangle(Math.Max(work.Left,Math.Min(x,work.Right-size.Width)),Math.Max(work.Top,Math.Min(card.Top+(card.Height-size.Height)/2,work.Bottom-size.Height)),size.Width,size.Height);}
@@ -261,7 +275,21 @@ internal sealed class CodexRingOverlay : IDisposable
             }
         }
         using(var noCards=RenderDetails(null,null,null,null,0,null,new long?[0],144))if(noCards.Height!=267)throw new Exception("无卡提示收起到期信息");
-        System.IO.File.WriteAllText(System.IO.Path.Combine(directory,"overlay-test.txt"),"PASS: original style, native layered/click-through/no-activate, alpha upload, always-inside fallback at100/125/150, footer/update clearance, invalid bounds filtering, hover render/screen clamping, native visibility restoration. No Codex interaction.");
+        // 用自有的离屏窗口模拟客户端、圆环和遮挡应用，验证失焦后的真实原生层级。
+        IntPtr foregroundBefore=Native.GetForegroundWindow();
+        using(var owner=new RingWindow())using(var ring=new RingWindow())using(var popup=new RingWindow())using(var cover=new RingWindow())using(var image=Render(50,80,96)) {
+            foreach(var window in new[]{owner,ring,popup,cover}){window.SetBitmap(image);window.Location=new Point(-32000,-32000);}
+            owner.EnsureVisible();ring.Attach(owner.Handle);ring.EnsureVisible();cover.EnsureVisible();ring.EnsureVisible(popup.Handle);
+            bool coverAboveRing=false;var above=Native.GetWindow(ring.Handle,3);for(int i=0;i<512&&above!=IntPtr.Zero;i++,above=Native.GetWindow(above,3))if(above==cover.Handle){coverAboveRing=true;break;}
+            if(!Native.IsWindowVisible(ring.Handle)||!coverAboveRing||Native.GetWindow(ring.Handle,4)!=owner.Handle)throw new Exception("失焦后应保留圆环且位于遮挡窗口下方");
+            popup.Attach(owner.Handle);popup.EnsureVisible(ring.Handle);ring.EnsureVisible(popup.Handle);popup.EnsureVisible(ring.Handle);
+            bool coverAbovePopup=false;above=Native.GetWindow(popup.Handle,3);for(int i=0;i<512&&above!=IntPtr.Zero;i++,above=Native.GetWindow(above,3))if(above==cover.Handle){coverAbovePopup=true;break;}
+            if(!coverAbovePopup||Native.GetWindow(ring.Handle,3)!=popup.Handle)throw new Exception("提示和圆环的遮挡层级错误");
+            Native.SetWindowPos(cover.Handle,new IntPtr(-1),0,0,0,0,0x213);ring.EnsureVisible(popup.Handle);popup.EnsureVisible(ring.Handle);
+            if((Native.GetWindowLong(ring.Handle,-20)&8)!=0||(Native.GetWindowLong(popup.Handle,-20)&8)!=0)throw new Exception("浮层意外变为全局置顶");
+        }
+        if(Native.GetForegroundWindow()!=foregroundBefore)throw new Exception("浮层层级校正抢占焦点");
+        System.IO.File.WriteAllText(System.IO.Path.Combine(directory,"overlay-test.txt"),"PASS: original style, layered/click-through/no-activate, DPI/geometry/hover, native visibility restoration; background owner attachment, cover/ring/tooltip Z order, no TopMost promotion, foreground unchanged. Only synthetic windows; no Codex interaction.");
     }
 
     // 原生分层工具窗口：不激活、不进任务栏、鼠标穿透，不设置系统级 TopMost。
@@ -272,8 +300,16 @@ internal sealed class CodexRingOverlay : IDisposable
         protected override bool ShowWithoutActivation {get{return true;}}
         protected override CreateParams CreateParams {get{var p=base.CreateParams;p.ExStyle|=0x80000|0x20|0x80|0x08000000;return p;}}
         public void Attach(IntPtr target){if(owner==target)return;if(IntPtr.Size==8)Native.SetWindowLongPtr(Handle,-8,target);else Native.SetWindowLong(Handle,-8,target.ToInt32());owner=target;}
-        // 修复托管 Visible 与原生可见性/层级不同步，不激活窗口或改变原生 owner 层级。
-        public void EnsureVisible(){if(!Native.IsWindowVisible(Handle))Native.ShowWindow(Handle,4);Native.SetWindowPos(Handle,IntPtr.Zero,0,0,0,0,0x213);}
+        // companion 是另一张浮层；插入到 owner 正上方，保留其他应用的遮挡关系。
+        public void EnsureVisible(IntPtr companion=default(IntPtr))
+        {
+            if(!Native.IsWindowVisible(Handle))Native.ShowWindow(Handle,4);
+            IntPtr after=owner==IntPtr.Zero?IntPtr.Zero:Native.GetWindow(owner,3);
+            for(int i=0;i<2&&after!=IntPtr.Zero&&(after==Handle||after==companion);i++)after=Native.GetWindow(after,3);
+            // 避免借用系统置顶窗口的层级将本浮层意外变成 TopMost。
+            if(after!=IntPtr.Zero&&(Native.GetWindowLong(after,-20)&8)!=0)after=new IntPtr(-2);
+            Native.SetWindowPos(Handle,after,0,0,0,0,0x213);
+        }
         public void SetBitmap(Bitmap bitmap)
         {
             IntPtr screen=Native.GetDC(IntPtr.Zero),memory=Native.CreateCompatibleDC(screen),image=bitmap.GetHbitmap(Color.FromArgb(0)),old=Native.SelectObject(memory,image);
@@ -288,6 +324,9 @@ internal sealed class CodexRingOverlay : IDisposable
         [StructLayout(LayoutKind.Sequential)] public struct Size {public int Width,Height;}
         [StructLayout(LayoutKind.Sequential,Pack=1)] public struct Blend {public byte Operation,Flags,Alpha,Format;}
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr window);
+        [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr window,uint command);
+        [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(Point point);
         [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr window,uint flags);
         [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window,out uint processId);
         [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
