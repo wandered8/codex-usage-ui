@@ -11,13 +11,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build self-contained runtime installer
-        shell: powershell
+        shell: pwsh
         run: ./build.ps1
       - name: Test Node worker and statistics
-        shell: powershell
+        shell: pwsh
         run: ./.build/app/runtime/node.exe --test tests/*.test.cjs
       - name: Native smoke tests
-        shell: powershell
+        shell: pwsh
         run: |
           $exe=Join-Path $PWD '.build/app/Codex用量统计.exe'
           foreach($test in @(@('--overlay-test', '.build/overlay'),@('--dpi-test', '.build/dpi.txt'),@('--statistics-test', '.build/statistics.txt'))) {
@@ -25,7 +25,7 @@ jobs:
             if($process.ExitCode -ne 0){throw 'Native test failed'}
           }
       - name: Publish installer
-        shell: powershell
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
