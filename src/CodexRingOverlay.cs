@@ -210,10 +210,21 @@ internal sealed class CodexRingOverlay : IDisposable
             Meter(g,7,five,"5h额度");Meter(g,70,week,"周额度");
         }return bitmap;
     }
+    // 按用户确认的节点插值：中间蓝色区间保留原有 60% 蓝色。
+    private static readonly int[,] ColorStops={{10,220,53,65},{25,233,110,48},{35,225,151,47},{40,211,140,100},{45,132,129,180},{50,42,119,215},{60,52,153,222},{80,38,176,219},{90,34,197,125}};
+    private static Color MeterColor(int value)
+    {
+        value=Math.Max(10,Math.Min(90,value));int index=1;
+        while(index<ColorStops.GetLength(0)-1&&value>ColorStops[index,0])index++;
+        double ratio=(double)(value-ColorStops[index-1,0])/(ColorStops[index,0]-ColorStops[index-1,0]);
+        return Color.FromArgb((int)Math.Floor(ColorStops[index-1,1]+(ColorStops[index,1]-ColorStops[index-1,1])*ratio+0.5),
+            (int)Math.Floor(ColorStops[index-1,2]+(ColorStops[index,2]-ColorStops[index-1,2])*ratio+0.5),
+            (int)Math.Floor(ColorStops[index-1,3]+(ColorStops[index,3]-ColorStops[index-1,3])*ratio+0.5));
+    }
     private static void Meter(Graphics g,int top,int? value,string label)
     {
-        Color color=value.HasValue?(value.Value>=75?Color.FromArgb(34,197,125):value.Value>=25?Color.FromArgb(52,153,222):Color.FromArgb(225,151,47)):Color.FromArgb(144,158,168);
-        using(var track=new Pen(Color.FromArgb(219,229,233),3.3f))g.DrawEllipse(track,5,top,24,24);
+        Color color=value.HasValue?MeterColor(value.Value):Color.FromArgb(144,158,168);
+        using(var track=new Pen(value==0?Color.FromArgb(238,181,186):Color.FromArgb(219,229,233),3.3f))g.DrawEllipse(track,5,top,24,24);
         if(value.HasValue&&value.Value>0)using(var pen=new Pen(color,3.3f)){pen.StartCap=LineCap.Round;pen.EndCap=LineCap.Round;g.DrawArc(pen,5,top,24,24,-90,Math.Min(100,Math.Max(0,value.Value))*3.6f);}
         using(var alignment=new StringFormat {Alignment=StringAlignment.Center,LineAlignment=StringAlignment.Center}){
             using(var font=new Font("Microsoft YaHei UI",11,FontStyle.Bold,GraphicsUnit.Pixel))using(var brush=new SolidBrush(Color.FromArgb(37,49,58)))g.DrawString(value.HasValue?value.Value+"%":"—",font,brush,new RectangleF(0,top+29,34,15),alignment);
@@ -227,6 +238,8 @@ internal sealed class CodexRingOverlay : IDisposable
     internal static void SelfTest(string directory)
     {
         System.IO.Directory.CreateDirectory(directory);
+        // 验证固定端点、蓝色区间和渐变中间值，避免阈值退化为跳色。
+        if(MeterColor(0)!=Color.FromArgb(220,53,65)||MeterColor(10)!=Color.FromArgb(220,53,65)||MeterColor(50)!=Color.FromArgb(42,119,215)||MeterColor(60)!=Color.FromArgb(52,153,222)||MeterColor(80)!=Color.FromArgb(38,176,219)||MeterColor(90)!=Color.FromArgb(34,197,125)||MeterColor(100)!=Color.FromArgb(34,197,125)||MeterColor(55)!=Color.FromArgb(47,136,219))throw new Exception("额度渐变颜色边界");
         using(var bitmap=Render(57,93,144)){
             if(bitmap.Width!=51||bitmap.Height!=200)throw new Exception("DPI尺寸");
             bitmap.Save(System.IO.Path.Combine(directory,"overlay-style.png"));

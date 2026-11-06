@@ -47,7 +47,7 @@ internal static class Setup
         string executable=Path.Combine(destination,Product+".exe");
         string startMenu=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs),Product+".lnk");CreateShortcut(startMenu,executable,destination);
         if(desktop)CreateShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),Product+".lnk"),executable,destination);
-        using(var key=Registry.CurrentUser.CreateSubKey(RegistryPath)){key.SetValue("DisplayName",Product);key.SetValue("DisplayVersion","1.1.1");key.SetValue("Publisher","wandered8");key.SetValue("InstallLocation",destination);key.SetValue("DisplayIcon",executable);key.SetValue("UninstallString","\""+Path.Combine(destination,"Uninstall.exe")+"\" --uninstall");key.SetValue("NoModify",1);key.SetValue("NoRepair",1);}
+        using(var key=Registry.CurrentUser.CreateSubKey(RegistryPath)){key.SetValue("DisplayName",Product);key.SetValue("DisplayVersion","1.2.0");key.SetValue("Publisher","wandered8");key.SetValue("InstallLocation",destination);key.SetValue("DisplayIcon",executable);key.SetValue("UninstallString","\""+Path.Combine(destination,"Uninstall.exe")+"\" --uninstall");key.SetValue("NoModify",1);key.SetValue("NoRepair",1);}
     }
     // 快捷方式目标若属于其他安装则不覆盖。
     private static void CreateShortcut(string file,string executable,string directory)

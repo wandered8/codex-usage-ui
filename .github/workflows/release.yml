@@ -29,8 +29,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag='v1.1.1'
+          $tag='v1.2.0'
           gh release view $tag *> $null
-          if($LASTEXITCODE -ne 0){gh release create $tag --target '${{ github.sha }}' --title 'Codex用量统计 v1.1.1' --notes '修复额度查询偶发失败时圆环立即显示空值：短暂失败保留有效读数并显示更新延迟，5 秒后重试；保留脱敏错误类型便于排查。'}
-          gh release upload $tag dist/CodexUsageUI-1.1.1-Setup-x64.exe dist/SHA256SUMS.txt --clobber
+          if($LASTEXITCODE -ne 0){gh release create $tag --target '${{ github.sha }}' --title 'Codex用量统计 v1.2.0' --notes '圆环额度颜色平滑过渡：90%–100% 为绿色，50%–80% 为蓝色渐变，0%–10% 为红色；零额度使用淡红色底环。'}
+          gh release upload $tag dist/CodexUsageUI-1.2.0-Setup-x64.exe dist/SHA256SUMS.txt --clobber
           if($LASTEXITCODE -ne 0){throw 'Release upload failed'}
