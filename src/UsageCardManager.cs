@@ -36,6 +36,7 @@ internal sealed partial class UsageCardManager : Form
     private bool? lastClientState;
     private int clientCheckTicks;
     private bool waitingForClient=true;
+    private bool quotaDelayed;
     private Icon currentIcon;
     private int? five, week;
     private long? fiveReset, weekReset;
@@ -83,12 +84,12 @@ internal sealed partial class UsageCardManager : Form
         try
         {
             Dictionary<string,object> data; using(var stream=new FileStream(Path.Combine(DirectoryPath,"quota-state.json"),FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete)) using(var reader=new StreamReader(stream,Encoding.UTF8)) data=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(reader.ReadToEnd());
-            updatedAt=Timestamp(data,"updatedAt")??0;waitingForClient=data.ContainsKey("status")&&(string)data["status"]=="WAITING_FOR_CODEX";
+            updatedAt=Timestamp(data,"updatedAt")??0;quotaDelayed=data.ContainsKey("status")&&((string)data["status"]=="STALE"||(string)data["status"]=="UNAVAILABLE");waitingForClient=data.ContainsKey("status")&&(string)data["status"]=="WAITING_FOR_CODEX";
             if(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()-updatedAt>150000)throw new InvalidDataException();
             five=Percent(data,"fiveHour");week=Percent(data,"weekly");fiveReset=Timestamp(data,"fiveResetAt");weekReset=Timestamp(data,"weekResetAt");object raw;resetCardCount=data.TryGetValue("resetCardCount",out raw)&&raw is int&&(int)raw>=0?(int?)raw:null;resetCardExpiresAt=Timestamp(data,"resetCardExpiresAt");object list;resetCardExpirations=data.TryGetValue("resetCardExpirations",out list)&&list is System.Collections.IEnumerable?((System.Collections.IEnumerable)list).Cast<object>().Select(value=>value==null?(long?)null:Convert.ToInt64(value)).ToArray():new long?[0];
         }
-        catch{if(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()-updatedAt>150000){five=null;week=null;fiveReset=null;weekReset=null;resetCardCount=null;resetCardExpiresAt=null;resetCardExpirations=new long?[0];}}
-        UpdateDisplay();if(ringOverlay!=null)ringOverlay.UpdateValues(five,week,fiveReset,weekReset,resetCardCount,resetCardExpiresAt,resetCardExpirations);
+        catch{quotaDelayed=true;if(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()-updatedAt>150000){five=null;week=null;fiveReset=null;weekReset=null;resetCardCount=null;resetCardExpiresAt=null;resetCardExpirations=new long?[0];}}
+        UpdateDisplay();if(ringOverlay!=null)ringOverlay.UpdateValues(five,week,fiveReset,weekReset,resetCardCount,resetCardExpiresAt,resetCardExpirations,quotaDelayed?(five.HasValue||week.HasValue?"更新延迟 · "+DateTimeOffset.FromUnixTimeMilliseconds(updatedAt).ToLocalTime().ToString("HH:mm:ss")+" 记录":"额度暂不可用 · 正在重试"):null);
     }
 
     // 图标用透明底的青色外环与品红内环，分别表示 5 小时和每周剩余额度。
@@ -111,7 +112,7 @@ internal sealed partial class UsageCardManager : Form
         string description=waitingForClient?"等待 Codex 启动 · Token 统计可查看":"5 小时剩余 "+Value(five)+" / 每周剩余 "+Value(week);
         if(currentIcon==null)using(var bitmap=RingBitmap(null,null))
         {IntPtr native=bitmap.GetHicon();try{currentIcon=(Icon)Icon.FromHandle(native).Clone();}finally{DestroyIcon(native);}tray.Icon=currentIcon;Icon=currentIcon;}
-        tray.Text=description;
+        tray.Text=quotaDelayed&&!waitingForClient?description+" · 更新延迟，重试中":description;
     }
 
     // 左键只显示统计，不再提供冗余的侧栏设置面板。

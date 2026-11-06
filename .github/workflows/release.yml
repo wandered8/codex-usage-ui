@@ -29,8 +29,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag='v1.1.0'
+          $tag='v1.1.1'
           gh release view $tag *> $null
-          if($LASTEXITCODE -ne 0){gh release create $tag --target '${{ github.sha }}' --title 'Codex用量统计 v1.1.0' --notes '新增按模型 USD 估算、计价说明和表头样式修复；圆环失焦后随 Codex 保持显示，正常接受其他窗口遮挡。内置 Node.js；需已安装并登录客户端。金额为 API 标准价估算，非订阅实际扣费。'}
-          gh release upload $tag dist/CodexUsageUI-1.1.0-Setup-x64.exe dist/SHA256SUMS.txt --clobber
+          if($LASTEXITCODE -ne 0){gh release create $tag --target '${{ github.sha }}' --title 'Codex用量统计 v1.1.1' --notes '修复额度查询偶发失败时圆环立即显示空值：短暂失败保留有效读数并显示更新延迟，5 秒后重试；保留脱敏错误类型便于排查。'}
+          gh release upload $tag dist/CodexUsageUI-1.1.1-Setup-x64.exe dist/SHA256SUMS.txt --clobber
           if($LASTEXITCODE -ne 0){throw 'Release upload failed'}

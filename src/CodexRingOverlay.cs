@@ -32,9 +32,10 @@ internal sealed class CodexRingOverlay : IDisposable
     private Rectangle lastBounds;
     private DateTime retryIdentity=DateTime.MinValue,hoverStarted=DateTime.MinValue;
     private bool hovering,detailsDirty=true;
+    private string snapshotNote;
 
     public CodexRingOverlay(){tracker.Interval=100;tracker.Tick+=(sender,args)=>{try{Track();}catch{dirty=true;lastBounds=Rectangle.Empty;HideBoth();}};tracker.Start();}
-    public void UpdateValues(int? fiveHour,int? weekly,long? fiveResetAt,long? weekResetAt,int? resetCardCount,long? resetCardExpiresAt,long?[] expirations){if(five!=fiveHour||week!=weekly){five=fiveHour;week=weekly;dirty=true;detailsDirty=true;}if(fiveReset!=fiveResetAt||weekReset!=weekResetAt||resetCards!=resetCardCount||resetExpiry!=resetCardExpiresAt||!resetExpirations.SequenceEqual(expirations)){fiveReset=fiveResetAt;weekReset=weekResetAt;resetCards=resetCardCount;resetExpiry=resetCardExpiresAt;resetExpirations=expirations;detailsDirty=true;}}
+    public void UpdateValues(int? fiveHour,int? weekly,long? fiveResetAt,long? weekResetAt,int? resetCardCount,long? resetCardExpiresAt,long?[] expirations,string note=null){if(snapshotNote!=note){snapshotNote=note;detailsDirty=true;}if(five!=fiveHour||week!=weekly){five=fiveHour;week=weekly;dirty=true;detailsDirty=true;}if(fiveReset!=fiveResetAt||weekReset!=weekResetAt||resetCards!=resetCardCount||resetExpiry!=resetCardExpiresAt||!resetExpirations.SequenceEqual(expirations)){fiveReset=fiveResetAt;weekReset=weekResetAt;resetCards=resetCardCount;resetExpiry=resetCardExpiresAt;resetExpirations=expirations;detailsDirty=true;}}
     private void HideBoth(){if(!floating.IsDisposed)floating.Hide();if(!details.IsDisposed)details.Hide();hovering=false;}
 
     // 失焦后保留已识别的客户端，浮层按其窗口层级排列，不因点击桌面而隐藏。
@@ -160,7 +161,7 @@ internal sealed class CodexRingOverlay : IDisposable
         if(!hovering){hovering=true;hoverStarted=DateTime.UtcNow;}
         if((DateTime.UtcNow-hoverStarted).TotalMilliseconds<300)return;
         if(!details.IsHandleCreated)detailsDirty=true;
-        if(detailsDirty||details.Width!=(int)Math.Ceiling(236*dpi/96f)){using(var bitmap=RenderDetails(five,week,fiveReset,weekReset,resetCards,resetExpiry,resetExpirations,dpi))details.SetBitmap(bitmap);detailsDirty=false;}
+        if(detailsDirty||details.Width!=(int)Math.Ceiling(236*dpi/96f)){using(var bitmap=RenderDetails(five,week,fiveReset,weekReset,resetCards,resetExpiry,resetExpirations,dpi,snapshotNote))details.SetBitmap(bitmap);detailsDirty=false;}
         Rectangle work=Screen.FromRectangle(bounds).WorkingArea;
         details.Bounds=DetailBounds(bounds,details.Size,work,Math.Max(4,(int)(8*dpi/96f)));
         details.Attach(target);if(!details.Visible)details.Show();details.EnsureVisible(floating.Handle);
@@ -169,7 +170,7 @@ internal sealed class CodexRingOverlay : IDisposable
     {int x=card.Right+gap;if(x+size.Width>work.Right)x=card.Left-size.Width-gap;return new Rectangle(Math.Max(work.Left,Math.Min(x,work.Right-size.Width)),Math.Max(work.Top,Math.Min(card.Top+(card.Height-size.Height)/2,work.Bottom-size.Height)),size.Width,size.Height);}
     private static string ResetText(long? timestamp){try{return timestamp.HasValue?DateTimeOffset.FromUnixTimeSeconds(timestamp.Value).ToLocalTime().ToString("MM/dd HH:mm")+" 重置":"重置时间暂不可用";}catch{return "重置时间暂不可用";}}
     private static string ExpiryText(long? timestamp){try{return timestamp.HasValue?"最近到期："+DateTimeOffset.FromUnixTimeSeconds(timestamp.Value).ToLocalTime().ToString("MM/dd HH:mm"):"到期时间暂不可用";}catch{return "到期时间暂不可用";}}
-    internal static Bitmap RenderDetails(int? five,int? week,long? fiveAt,long? weekAt,int? cards,long? expiry,long?[] expirations,int dpi)
+    internal static Bitmap RenderDetails(int? five,int? week,long? fiveAt,long? weekAt,int? cards,long? expiry,long?[] expirations,int dpi,string note=null)
     {
         int lines=cards>0?Math.Max(1,expirations.Length)+(cards>expirations.Length&&expirations.Length>0?1:0):0;
         float scale=dpi/96f;int height=178+lines*17;var bitmap=new Bitmap((int)Math.Ceiling(236*scale),(int)Math.Ceiling(height*scale),PixelFormat.Format32bppPArgb);
@@ -177,6 +178,7 @@ internal sealed class CodexRingOverlay : IDisposable
             g.Clear(Color.Transparent);g.ScaleTransform(scale,scale);g.SmoothingMode=SmoothingMode.AntiAlias;g.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
             using(var shape=Round(new RectangleF(1,1,233,height-3),12)){using(var background=new SolidBrush(Color.FromArgb(252,255,255,255)))g.FillPath(background,shape);using(var border=new Pen(Color.FromArgb(215,224,231),1))g.DrawPath(border,shape);}
             DrawText(g,"Codex 剩余额度",16,13,12,Color.FromArgb(37,49,58),true);
+            if(note!=null)DrawText(g,note,16,31,8,Color.FromArgb(176,117,39),false);
             DrawText(g,"5 小时额度",16,45,10,Color.FromArgb(101,115,124),false);
             DrawText(g,five.HasValue?five+"%":"—",174,41,18,Color.FromArgb(36,148,214),true);
             DrawText(g,ResetText(fiveAt),16,66,9,Color.FromArgb(101,115,124),false);
