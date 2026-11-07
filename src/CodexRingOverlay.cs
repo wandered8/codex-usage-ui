@@ -23,7 +23,7 @@ internal sealed class CodexRingOverlay : IDisposable
     private long? resetExpiry;
     private long?[] resetExpirations=new long?[0];
     private int lastDpi;
-    private bool dirty=true, disposed, scanning;
+    private bool dirty=true, disposed, scanning, candidateScanning;
     private DateTime nextScan=DateTime.MinValue;
     private DateTime fastScanUntil=DateTime.MinValue;
     private Size geometrySize;
@@ -47,13 +47,10 @@ internal sealed class CodexRingOverlay : IDisposable
         if(!floating.IsHandleCreated){dirty=true;lastBounds=Rectangle.Empty;}
         IntPtr active=Native.GetAncestor(Native.GetForegroundWindow(),3);
         if(target!=IntPtr.Zero&&!Native.IsWindow(target))target=IntPtr.Zero;
-        if(active!=foreground||(target==IntPtr.Zero&&DateTime.UtcNow>=retryIdentity))
+        if(active!=foreground||(DateTime.UtcNow>=retryIdentity&&(target==IntPtr.Zero||active!=target)))
         {
-            IntPtr previous=target;
-            if(IsCodexWindow(active))target=active;
-            else if(target==IntPtr.Zero)target=FindCodexWindow();
-            if(target!=previous){nativeControls.Clear();geometrySize=Size.Empty;nextScan=DateTime.MinValue;details.Hide();hovering=false;lastBounds=Rectangle.Empty;}
-            foreground=active;retryIdentity=DateTime.UtcNow.AddSeconds(1);
+            if(target==IntPtr.Zero||(active!=target&&IsCodexWindow(active)))FindMainWindow(active,target==IntPtr.Zero);
+            foreground=active;retryIdentity=DateTime.UtcNow.AddSeconds(target==IntPtr.Zero?1:4);
         }
         Native.Rect nativeRect;Native.Point origin=new Native.Point();
         if(target==IntPtr.Zero||!Native.IsWindowVisible(target)||Native.IsIconic(target)||!Native.GetClientRect(target,out nativeRect)||!Native.ClientToScreen(target,ref origin))
@@ -84,13 +81,56 @@ internal sealed class CodexRingOverlay : IDisposable
     {
         if(handle==IntPtr.Zero||!Native.IsWindow(handle))return false;
         uint processId;Native.GetWindowThreadProcessId(handle,out processId);
-        try{using(var process=Process.GetProcessById((int)processId)){string executable=process.MainModule.FileName;return executable.IndexOf(@"\OpenAI.Codex_",StringComparison.OrdinalIgnoreCase)>=0&&executable.EndsWith(@"\app\ChatGPT.exe",StringComparison.OrdinalIgnoreCase);}}catch{return false;}
+        try{using(var process=Process.GetProcessById((int)processId)){if(!String.Equals(process.ProcessName,"ChatGPT",StringComparison.OrdinalIgnoreCase))return false;string executable=process.MainModule.FileName;return executable.IndexOf(@"\OpenAI.Codex_",StringComparison.OrdinalIgnoreCase)>=0&&executable.EndsWith(@"\app\ChatGPT.exe",StringComparison.OrdinalIgnoreCase);}}catch{return false;}
     }
-    // 统计程序在后台启动时也能找到已打开的客户端；无客户端时最多每秒重试一次。
-    private static IntPtr FindCodexWindow()
+    // 验证真实侧栏或标准可调整大小的主窗口，不能仅凭同一进程将宠物识别成主窗口。
+    private static bool LooksLikeMainSidebar(IEnumerable<Rectangle> controls,int clientHeight,float scale)
     {
-        foreach(var process in Process.GetProcessesByName("ChatGPT"))using(process){try{var handle=process.MainWindowHandle;if(handle!=IntPtr.Zero&&Native.IsWindowVisible(handle)&&IsCodexWindow(handle))return handle;}catch{}}
-        return IntPtr.Zero;
+        var buttons=controls.ToList();return buttons.Count>=2&&buttons.Max(r=>r.Top)-buttons.Min(r=>r.Top)>=Math.Min(60*scale,clientHeight*0.2f);
+    }
+    private static bool IsConventionalMainWindow(bool processMain,int style,int extra)
+    {return processMain&&(style&0x40000)!=0&&(extra&(0x80|0x80000))==0;}
+    private static bool HasMainWindowSidebar(IntPtr handle)
+    {
+        Native.Rect rect;var origin=new Native.Point();
+        if(!Native.IsWindowVisible(handle)||Native.IsIconic(handle)||!Native.GetClientRect(handle,out rect)||!Native.ClientToScreen(handle,ref origin))return false;
+        int dpi=(int)Native.GetDpiForWindow(handle);float scale=(dpi>0?dpi:96)/96f;
+        try{if(LooksLikeMainSidebar(ReadSidebarControls(handle,new Rectangle(origin.X,origin.Y,rect.Right,rect.Bottom),scale),rect.Bottom,scale))return true;}catch{}
+        // 无障碍树暂时不可用时，只接受系统识别的可调整大小主窗口，排除透明/工具窗口。
+        try{uint pid;Native.GetWindowThreadProcessId(handle,out pid);using(var process=Process.GetProcessById((int)pid)){
+            int style=Native.GetWindowLong(handle,-16),extra=Native.GetWindowLong(handle,-20);
+            return IsConventionalMainWindow(process.MainWindowHandle==handle,style,extra);
+        }}catch{return false;}
+    }
+    // 背景线程检查候选窗口；暂时无法确认时保留原目标，主窗口关闭后枚举同进程窗口重新发现。
+    private void FindMainWindow(IntPtr active,bool discover)
+    {
+        if(candidateScanning)return;candidateScanning=true;
+        Task.Run(()=>{
+            IntPtr found=IntPtr.Zero;
+            try{
+                if(IsCodexWindow(active)&&HasMainWindowSidebar(active))found=active;
+                if(found==IntPtr.Zero&&discover)Native.EnumWindows((handle,unused)=>{
+                    if(IsCodexWindow(handle)&&HasMainWindowSidebar(handle)){found=handle;return false;}return true;
+                },IntPtr.Zero);
+            }catch{}
+            try{floating.BeginInvoke(new Action(()=>{
+                candidateScanning=false;if(disposed||found==IntPtr.Zero||!Native.IsWindow(found))return;
+                if(target!=IntPtr.Zero&&target!=found&&Native.GetAncestor(Native.GetForegroundWindow(),3)!=found)return;
+                if(target!=found){target=found;nativeControls.Clear();geometrySize=Size.Empty;nextScan=DateTime.MinValue;details.Hide();hovering=false;lastBounds=Rectangle.Empty;}
+                Track();
+            }));}catch{candidateScanning=false;}
+        });
+    }
+    // 查询左侧栏按钮的屏幕几何，不读取任何按钮名称或会话文本。
+    private static List<Rectangle> ReadSidebarControls(IntPtr handle,Rectangle client,float scale)
+    {
+        var result=new List<Rectangle>();var root=AutomationElement.FromHandle(handle);
+        var buttons=root.FindAll(TreeScope.Descendants,new AndCondition(new PropertyCondition(AutomationElement.ControlTypeProperty,ControlType.Button),new PropertyCondition(AutomationElement.IsOffscreenProperty,false)));
+        foreach(AutomationElement element in buttons){var r=element.Current.BoundingRectangle;
+            if(!r.IsEmpty&&r.Width>=8*scale&&r.Height>=8*scale&&r.Height<=72*scale&&r.Top>=client.Top&&r.Bottom<=client.Bottom+2&&r.Left>=client.Left-2&&r.Right<=client.Left+58*scale)
+                result.Add(new Rectangle((int)Math.Floor(r.Left-client.Left),(int)Math.Floor(r.Top-client.Top),(int)Math.Ceiling(r.Width),(int)Math.Ceiling(r.Height)));}
+        return result;
     }
 
     // 仅查询原生按钮几何，不读取名称、文本、聊天或账户；单个后台查询避免阻塞界面。
@@ -98,14 +138,7 @@ internal sealed class CodexRingOverlay : IDisposable
     {
         scanning=true;nextScan=DateTime.UtcNow.AddMilliseconds(DateTime.UtcNow<fastScanUntil?120:4000);
         Task.Run(()=>{
-            var result=new List<Rectangle>();
-            try {
-                var root=AutomationElement.FromHandle(handle);
-                var buttons=root.FindAll(TreeScope.Descendants,new AndCondition(new PropertyCondition(AutomationElement.ControlTypeProperty,ControlType.Button),new PropertyCondition(AutomationElement.IsOffscreenProperty,false)));
-                foreach(AutomationElement element in buttons){var r=element.Current.BoundingRectangle;
-                    if(!r.IsEmpty&&r.Width>=8*scale&&r.Height>=8*scale&&r.Height<=72*scale&&r.Top>=client.Top&&r.Bottom<=client.Bottom+2&&r.Left>=client.Left-2&&r.Right<=client.Left+58*scale)
-                        result.Add(new Rectangle((int)Math.Floor(r.Left-client.Left),(int)Math.Floor(r.Top-client.Top),(int)Math.Ceiling(r.Width),(int)Math.Ceiling(r.Height)));}
-            } catch { }
+            var result=new List<Rectangle>();try{result=ReadSidebarControls(handle,client,scale);}catch{}
             // 空/异常快照不覆盖已确认的按钮几何，避免提供程序短暂失效引起跳动。
             try{floating.BeginInvoke(new Action(()=>{
                 scanning=false;if(target!=handle)return;
@@ -238,6 +271,11 @@ internal sealed class CodexRingOverlay : IDisposable
     internal static void SelfTest(string directory)
     {
         System.IO.Directory.CreateDirectory(directory);
+        // 宠物同进程且含一排按钮：不能替换有纵向导航栏的客户端窗口。
+        var mainSidebar=new[]{new Rectangle(8,20,36,36),new Rectangle(8,110,36,36)};
+        var petButtons=new[]{new Rectangle(4,30,20,20),new Rectangle(28,30,20,20)};
+        if(!LooksLikeMainSidebar(mainSidebar,250,1)||LooksLikeMainSidebar(petButtons,250,1)||LooksLikeMainSidebar(new Rectangle[0],700,1))throw new Exception("主窗口与宠物侧栏识别");
+        if(!IsConventionalMainWindow(true,0x40000,0)||IsConventionalMainWindow(false,0x40000,0)||IsConventionalMainWindow(true,0,0)||IsConventionalMainWindow(true,0x40000,0x80000)||IsConventionalMainWindow(true,0x40000,0x80))throw new Exception("标准主窗口与透明宠物窗口识别");
         // 验证固定端点、蓝色区间和渐变中间值，避免阈值退化为跳色。
         if(MeterColor(0)!=Color.FromArgb(220,53,65)||MeterColor(10)!=Color.FromArgb(220,53,65)||MeterColor(50)!=Color.FromArgb(42,119,215)||MeterColor(60)!=Color.FromArgb(52,153,222)||MeterColor(80)!=Color.FromArgb(38,176,219)||MeterColor(90)!=Color.FromArgb(34,197,125)||MeterColor(100)!=Color.FromArgb(34,197,125)||MeterColor(55)!=Color.FromArgb(47,136,219))throw new Exception("额度渐变颜色边界");
         using(var bitmap=Render(57,93,144)){
@@ -339,6 +377,8 @@ internal sealed class CodexRingOverlay : IDisposable
         [StructLayout(LayoutKind.Sequential)] public struct Size {public int Width,Height;}
         [StructLayout(LayoutKind.Sequential,Pack=1)] public struct Blend {public byte Operation,Flags,Alpha,Format;}
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+        public delegate bool EnumWindowsProc(IntPtr window,IntPtr parameter);
+        [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc callback,IntPtr parameter);
         [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr window);
         [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr window,uint command);
         [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(Point point);
