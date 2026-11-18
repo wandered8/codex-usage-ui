@@ -23,7 +23,9 @@ internal sealed partial class UsageCardManager
     private int hoveredDay=-1;
     private readonly Color ink=Color.FromArgb(30,36,46), muted=Color.FromArgb(107,114,128), accent=Color.FromArgb(8,145,178);
 
-    // 2026-11-05 核对官方标准短上下文文本价格，单位 USD / 100万 Token。
+    private const string PricingVerifiedDate="2026-11-18";
+
+    // 官方标准短上下文文本价格，单位 USD / 100万 Token。
     // 来源：https://developers.openai.com/api/docs/pricing；不将其他模型或服务档位自动映射为这些价格。
     private sealed class ModelPrice
     {
@@ -31,6 +33,8 @@ internal sealed partial class UsageCardManager
         public ModelPrice(decimal input,decimal cachedInput,decimal output){InputPerMillion=input;CachedInputPerMillion=cachedInput;OutputPerMillion=output;}
     }
     private static readonly Dictionary<string,ModelPrice> ModelPrices=new Dictionary<string,ModelPrice>(StringComparer.Ordinal) {
+        {"gpt-6.2-astra",new ModelPrice(8m,0.40m,40m)},
+        {"gpt-6.2-sol",new ModelPrice(2m,0.10m,10m)},
         {"gpt-6.1-sol",new ModelPrice(2m,0.10m,10m)},
         {"gpt-6.1-terra",new ModelPrice(1m,0.05m,5m)},
         {"gpt-6-astra",new ModelPrice(10m,1m,50m)},
@@ -60,12 +64,12 @@ internal sealed partial class UsageCardManager
     {
         decimal? cost=EstimateCost(row);if(!cost.HasValue)return "该模型暂无已核验官方价格，或计数异常；未计入金额合计。";
         var price=ModelPrices[row.model];
-        return row.model+" · 标准短上下文估算 USD\n普通输入："+(row.input-row.cached).ToString("N0")+" × $"+price.InputPerMillion+" / 1M\n缓存输入："+row.cached.ToString("N0")+" × $"+price.CachedInputPerMillion+" / 1M\n输出："+row.output.ToString("N0")+" × $"+price.OutputPerMillion+" / 1M\n合计："+Money(cost.Value,4)+"\n价格核验：2026-11-05；非订阅实际扣费。";
+        return row.model+" · 标准短上下文估算 USD\n普通输入："+(row.input-row.cached).ToString("N0")+" × $"+price.InputPerMillion+" / 1M\n缓存输入："+row.cached.ToString("N0")+" × $"+price.CachedInputPerMillion+" / 1M\n输出："+row.output.ToString("N0")+" × $"+price.OutputPerMillion+" / 1M\n合计："+Money(cost.Value,4)+"\n价格核验："+PricingVerifiedDate+"；非订阅实际扣费。";
     }
     // 聚合日志不含完整计费档位和缓存写入信息，因此展示标准价格估算而非账单。
     private void ShowPricingDetails()
     {
-        string text="官方标准短上下文文本价格，USD / 100万 Token\n价格核验：2026-11-05\n\n模型：普通输入 / 缓存输入 / 输出\n";
+        string text="官方标准短上下文文本价格，USD / 100万 Token\n价格核验："+PricingVerifiedDate+"\n\n模型：普通输入 / 缓存输入 / 输出\n";
         foreach(var item in ModelPrices)text+=item.Key+"：$"+item.Value.InputPerMillion+" / $"+item.Value.CachedInputPerMillion+" / $"+item.Value.OutputPerMillion+"\n";
         text+="\n所选时段按模型汇总：\n";
         foreach(var group in selectedRows.GroupBy(row=>row.model))text+=group.Key+"："+CostSummary(group,4)+"\n";
@@ -234,8 +238,11 @@ internal sealed partial class UsageCardManager
     {
         var sol=new TokenRow {model="gpt-6.1-sol",input=1000000,cached=800000,output=100000};
         var terra=new TokenRow {model="gpt-6.1-terra",input=1000000,cached=800000,output=100000};
+        var astra62=new TokenRow {model="gpt-6.2-astra",input=1000000,cached=800000,output=100000};
+        var sol62=new TokenRow {model="gpt-6.2-sol",input=1000000,cached=800000,output=100000};
         var unknown=new TokenRow {model="not-priced",input=1000000};
         if(EstimateCost(sol)!=1.48m||EstimateCost(terra)!=0.74m)throw new Exception("缓存拆分或分模型单价错误");
+        if(EstimateCost(astra62)!=5.92m||EstimateCost(sol62)!=1.48m)throw new Exception("GPT-6.2 模型单价错误");
         if(CostSummary(new[]{sol,terra},4)!="$2.2200")throw new Exception("模型合计错误");
         if(EstimateCost(new TokenRow {model="gpt-6.1-sol",input=1000000,cached=1000000})!=0.10m)throw new Exception("缓存重复计费");
         if(EstimateCost(new TokenRow {model="gpt-6.1-sol",input=1000000,output=100000})!=3m)throw new Exception("未缓存输入计价错误");
@@ -247,7 +254,7 @@ internal sealed partial class UsageCardManager
             if(form.table.Columns.Count!=7||form.table.Rows[0].Cells[6].ToolTipText.IndexOf("普通输入",StringComparison.Ordinal)<0)throw new Exception("金额列或计价详情缺失");
             form.periodBox.SelectedIndex=0;if(form.selectedRows.Count!=1||CostSummary(form.selectedRows,4)=="待定价")throw new Exception("金额未跟随日期筛选");
         }
-        File.WriteAllText(report,"PASS: model rates, input/cache/output split, all-cache, no-cache, zero, unknown/partial pricing, invalid counts, tiny amounts, cost column/details and date filtering.");
+        File.WriteAllText(report,"PASS: model rates including GPT-6.2 Astra and Sol, input/cache/output split, all-cache, no-cache, zero, unknown/partial pricing, invalid counts, tiny amounts, cost column/details and date filtering.");
     }
 
     // 预览数据仅用于离屏布局检查，不会写入真实统计文件。

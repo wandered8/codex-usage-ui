@@ -29,8 +29,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag='v1.2.1'
+          $tag='v1.2.2'
           gh release view $tag *> $null
-          if($LASTEXITCODE -ne 0){gh release create $tag --target '${{ github.sha }}' --title 'Codex用量统计 v1.2.1' --notes '修复拖动 Codex 宠物时圆环误吸附到宠物窗口的问题，确认客户端侧栏后再绑定目标。'}
-          gh release upload $tag dist/CodexUsageUI-1.2.1-Setup-x64.exe dist/SHA256SUMS.txt --clobber
+          if($LASTEXITCODE -ne 0){gh release create $tag --target '${{ github.sha }}' --title 'Codex用量统计 v1.2.2' --notes '新增 GPT-6.2 Astra 和 Sol 的官方标准 API 价格，用于 Token 费用估算。'}
+          gh release upload $tag dist/CodexUsageUI-1.2.2-Setup-x64.exe dist/SHA256SUMS.txt --clobber
           if($LASTEXITCODE -ne 0){throw 'Release upload failed'}
