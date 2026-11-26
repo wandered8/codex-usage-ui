@@ -2,6 +2,8 @@ name: Build Windows installer
 on:
   push:
     branches: [main]
+    paths: [build.ps1]
+    tags: ['v*']
   workflow_dispatch:
 permissions:
   contents: write
@@ -12,7 +14,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build self-contained runtime installer
         shell: pwsh
-        run: ./build.ps1
+        run: |
+          if($env:GITHUB_REF_TYPE -eq 'tag'){./build.ps1 -Version ($env:GITHUB_REF_NAME.Substring(1))}
+          else{./build.ps1}
       - name: Test Node worker and statistics
         shell: pwsh
         run: ./.build/app/runtime/node.exe --test tests/*.test.cjs
@@ -20,17 +24,23 @@ jobs:
         shell: pwsh
         run: |
           $exe=Join-Path $PWD '.build/app/Codex用量统计.exe'
-          foreach($test in @(@('--overlay-test', '.build/overlay'),@('--pricing-test', '.build/pricing.txt'),@('--dpi-test', '.build/dpi.txt'),@('--statistics-test', '.build/statistics.txt'))) {
-            $process=Start-Process -FilePath $exe -ArgumentList $test -Wait -PassThru
+          foreach($test in @(@('--overlay-test', '.build/overlay'),@('--pricing-test', '.build/pricing.txt'),@('--dpi-test', '.build/dpi.txt'),@('--statistics-test', '.build/statistics.txt'),@('--update-test', '.build/update.txt'),@('--smoke', '.build/smoke.txt'))) {
+            $process=Start-Process -FilePath $exe -ArgumentList $test -WindowStyle Hidden -Wait -PassThru
             if($process.ExitCode -ne 0){throw 'Native test failed'}
           }
+          $installer=Get-ChildItem -LiteralPath ./dist -Filter 'CodexUsageUI-*-Setup-x64.exe'
+          ./tests/update-install.ps1 -InstallerPath $installer.FullName
       - name: Publish installer
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag='v1.2.2'
+          $installer=Get-ChildItem -LiteralPath ./dist -Filter 'CodexUsageUI-*-Setup-x64.exe'
+          if($installer.Name -notmatch '^CodexUsageUI-(\d+\.\d+\.\d+)-Setup-x64\.exe$'){throw 'Unexpected installer name'}
+          $tag='v'+$Matches[1]
           gh release view $tag *> $null
-          if($LASTEXITCODE -ne 0){gh release create $tag --target '${{ github.sha }}' --title 'Codex用量统计 v1.2.2' --notes '新增 GPT-6.2 Astra 和 Sol 的官方标准 API 价格，用于 Token 费用估算。'}
-          gh release upload $tag dist/CodexUsageUI-1.2.2-Setup-x64.exe dist/SHA256SUMS.txt --clobber
-          if($LASTEXITCODE -ne 0){throw 'Release upload failed'}
+          if($LASTEXITCODE -eq 0){Write-Output "$tag already published"; exit 0}
+          $target=@('--target',$env:GITHUB_SHA)
+          if($env:GITHUB_REF_TYPE -eq 'tag'){$target=@('--verify-tag')}
+          gh release create $tag $installer.FullName dist/SHA256SUMS.txt @target --title "Codex用量统计 $tag" --generate-notes
+          if($LASTEXITCODE -ne 0){throw 'Release creation failed'}

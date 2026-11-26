@@ -109,7 +109,8 @@ internal sealed partial class UsageCardManager
         table.Columns[0].FillWeight=90;table.Columns[1].FillWeight=160;
         for(int i=2;i<table.Columns.Count;i++){table.Columns[i].DefaultCellStyle.Alignment=DataGridViewContentAlignment.MiddleRight;table.Columns[i].HeaderCell.Style.Alignment=DataGridViewContentAlignment.MiddleRight;table.Columns[i].DefaultCellStyle.Font=new Font("Consolas",10);}
         status.SetBounds(38,681,864,22);status.BackColor=BackColor;status.Font=new Font("Microsoft YaHei UI",8.5f);status.ForeColor=muted;status.Text="本机近 30 天会话记录 · 正在建立统计";
-        Controls.AddRange(new Control[]{sync,table,status});
+        updateLink.SetBounds(752,68,160,22);
+        Controls.AddRange(new Control[]{sync,table,status,updateLink});
         logicalBounds=Controls.Cast<Control>().ToDictionary(control=>control,control=>control.Bounds);
         using(var graphics=Graphics.FromHwnd(IntPtr.Zero))ApplyStatisticsDpi((int)graphics.DpiX);
         DpiChanged+=(sender,args)=>ApplyStatisticsDpi(args.DeviceDpiNew);

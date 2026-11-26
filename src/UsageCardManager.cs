@@ -58,7 +58,7 @@ internal sealed partial class UsageCardManager : Form
         var menu=new ContextMenuStrip {RenderMode=ToolStripRenderMode.System,BackColor=SystemColors.Menu,ForeColor=SystemColors.MenuText,ShowImageMargin=false,ShowCheckMargin=true,Font=new Font("Microsoft YaHei UI",10)};
         menu.Items.Add("显示统计",null,(sender,args)=>ShowDetails());menu.Items.Add(new ToolStripSeparator());
         autoItem.Checked=HasOwnedStartup();autoItem.Click+=(sender,args)=>{try{SetStartup(!autoItem.Checked);autoItem.Checked=HasOwnedStartup();}catch(Exception error){MessageBox.Show(error.Message,"无法保存自启设置");}};
-        menu.Items.Add(autoItem);menu.Items.Add(new ToolStripSeparator());menu.Items.Add("退出",null,(sender,args)=>ExitTray());
+        menu.Items.Add(autoItem);InitializeUpdateMenu(menu);menu.Items.Add(new ToolStripSeparator());menu.Items.Add("退出",null,(sender,args)=>ExitTray());
         tray.ContextMenuStrip=menu;menu.Opening+=(sender,args)=>{try{autoItem.Checked=HasOwnedStartup();}catch{}};
         tray.MouseClick+=(s,e)=>{if(e.Button==MouseButtons.Left)ShowDetails();};
         UpdateDisplay();tray.Visible=true;if(!smokeTest)ringOverlay=new CodexRingOverlay();StartWorker();
@@ -145,7 +145,7 @@ internal sealed partial class UsageCardManager : Form
     {if(smokeTest)return;nextWorkerStart=DateTime.UtcNow.AddSeconds(30);if(worker!=null){worker.Dispose();worker=null;}try{worker=Process.Start(new ProcessStartInfo(File.Exists(Path.Combine(DirectoryPath,"runtime","node.exe"))?Path.Combine(DirectoryPath,"runtime","node.exe"):"node.exe","\""+Path.Combine(DirectoryPath,"quota-worker.cjs")+"\""){WorkingDirectory=DirectoryPath,UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true});lastClientState=null;SignalClientState();}
      catch{status.Text="未能启动额度采集，请检查 Node.js 24+。";}}
     private void ExitTray()
-    {exiting=true;timer.Stop();if(ringOverlay!=null)ringOverlay.Dispose();tray.Visible=false;tray.Dispose();if(worker!=null){try{if(!worker.HasExited){worker.StandardInput.WriteLine("stop");worker.StandardInput.Flush();if(!worker.WaitForExit(1500))worker.Kill();}}catch{}worker.Dispose();}
+    {exiting=true;StopUpdateChecks();timer.Stop();if(ringOverlay!=null)ringOverlay.Dispose();tray.Visible=false;tray.Dispose();if(worker!=null){try{if(!worker.HasExited){worker.StandardInput.WriteLine("stop");worker.StandardInput.Flush();if(!worker.WaitForExit(1500))worker.Kill();}}catch{}worker.Dispose();}
      if(currentIcon!=null)currentIcon.Dispose();Dispose();Application.ExitThread();}
 
     [STAThread]
@@ -158,6 +158,7 @@ internal sealed partial class UsageCardManager : Form
              var data=new Dictionary<string,object>{{"value",0}};if(Percent(data,"value")!=0)throw new Exception("zero");data["value"]=101;if(Percent(data,"value")!=null)throw new Exception("bounds");data["value"]=null;if(Percent(data,"value")!=null)throw new Exception("unknown");
              using(var image=RingBitmap(null,null))image.Save(Path.Combine(arguments[1],"app-icon.png"));File.WriteAllText(Path.Combine(arguments[1],"manager-self-test.txt"),"PASS: settings, zero/unknown/bounds, static icon rendering. No startup registration.");return 0;}
             Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
+            if(arguments.Length==2&&arguments[0]=="--update-test"){ReleaseUpdater.SelfTest(arguments[1]);return 0;}
             if(arguments.Length==2&&arguments[0]=="--pricing-test"){PricingSelfTest(arguments[1]);return 0;}
             if(arguments.Length==2&&arguments[0]=="--overlay-test")
             {CodexRingOverlay.SelfTest(arguments[1]);return 0;}
@@ -171,6 +172,7 @@ internal sealed partial class UsageCardManager : Form
                         if(form.ClientSize.Width!=(int)Math.Round(940*dpi/96d))throw new Exception("窗口缩放");
                         var button=form.Controls.OfType<StatsTabButton>().First();
                         if(button.Width!=(int)Math.Round(76*dpi/96d))throw new Exception("按钮缩放");
+                        if(form.updateLink.Right!=(int)Math.Round(912*dpi/96d))throw new Exception("更新入口缩放");
                         form.ShowChartTooltip(form,new MouseEventArgs(MouseButtons.None,0,(int)(130*dpi/96d),(int)(350*dpi/96d),0));
                         if(form.hoveredDay!=0)throw new Exception("柱状图高DPI命中");
                         form.hoveredDay=-1;
@@ -195,7 +197,7 @@ internal sealed partial class UsageCardManager : Form
                 smokeTest=true;
                 using(var form=new UsageCardManager(true,false,null))
                 {
-                    if(!form.tray.Visible||form.tray.Icon==null||form.tray.ContextMenuStrip.Items.Count!=5)throw new Exception("托盘或菜单未创建");
+                    if(!form.tray.Visible||form.tray.Icon==null||!form.tray.ContextMenuStrip.Items.Contains(form.updateItem))throw new Exception("托盘或更新菜单未创建");
                     var close=new FormClosingEventArgs(CloseReason.UserClosing,false);form.OnFormClosing(close);
                     if(!close.Cancel||!form.tray.Visible)throw new Exception("关闭窗口错误地退出托盘");
                     if(form.worker!=null)throw new Exception("自检不应启动采集");
@@ -216,6 +218,6 @@ internal sealed partial class UsageCardManager : Form
              using(var form=new UsageCardManager(Array.IndexOf(arguments,"--tray")>=0,false,signal))Application.Run();mutex.ReleaseMutex();}
             return 0;
         }
-        catch(Exception error){if(arguments.Length==2&&arguments[0]=="--self-test")File.WriteAllText(Path.Combine(arguments[1],"manager-self-test.txt"),"FAIL: "+error.Message);else if(arguments.Length==2&&arguments[0]=="--overlay-test")File.WriteAllText(Path.Combine(arguments[1],"overlay-test.txt"),"FAIL: "+error.Message);else MessageBox.Show(error.Message,"Codex用量统计",MessageBoxButtons.OK,MessageBoxIcon.Error);return 1;}
+        catch(Exception error){if(arguments.Length==2&&arguments[0]=="--self-test")File.WriteAllText(Path.Combine(arguments[1],"manager-self-test.txt"),"FAIL: "+error.Message);else if(arguments.Length==2&&arguments[0]=="--overlay-test")File.WriteAllText(Path.Combine(arguments[1],"overlay-test.txt"),"FAIL: "+error.Message);else if(arguments.Length==2&&arguments[0]=="--update-test")File.WriteAllText(arguments[1],"FAIL: "+error.Message);else MessageBox.Show(error.Message,"Codex用量统计",MessageBoxButtons.OK,MessageBoxIcon.Error);return 1;}
     }
 }

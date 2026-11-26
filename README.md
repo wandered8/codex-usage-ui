@@ -13,7 +13,11 @@ Windows Codex 桌面客户端的独立用量统计工具：侧栏吸附圆环、
 
 适用环境：Windows 10/11 x64、.NET Framework 4.8，以及已安装的 Windows Codex 桌面客户端。当前适配 Microsoft Store `OpenAI.Codex_*` 包、进程名 `ChatGPT.exe` 的客户端；其他发行形式暂未验证。非官方工具，未进行代码签名，Windows 可能显示未知发布者。
 
-默认安装在当前用户的 `%LOCALAPPDATA%\Programs\CodexUsageUI`。更新前请先从托盘退出统计程序，再运行新版安装包；无需关闭 Codex。卸载可在 Windows「已安装的应用」找到「Codex用量统计」，或运行安装目录的 `Uninstall.exe --uninstall`。卸载删除本工具及其聚合缓存，不删除 Codex 客户端、登录和会话记录。
+默认安装在当前用户的 `%LOCALAPPDATA%\Programs\CodexUsageUI`。
+
+从 v1.2.3 起，统计窗口右上角和托盘右键菜单都可检查更新。程序启动后会检查 GitHub 正式发行版，发现新版本时在托盘提示。点击「更新到 v…」并确认后，程序会下载并校验安装包，在当前目录更新并重新驻留托盘。本地设置、统计缓存与快捷方式会保留，Codex 可以继续使用。更早的版本可以先退出统计托盘，再运行带有更新功能的新版安装包。
+
+卸载可在 Windows「已安装的应用」找到「Codex用量统计」，或运行安装目录的 `Uninstall.exe --uninstall`。卸载会删除本工具及其聚合缓存。
 
 ## 功能
 
@@ -43,7 +47,9 @@ Windows Codex 桌面客户端的独立用量统计工具：侧栏吸附圆环、
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-构建脚本从 Node.js 官方站下载固定版本并核对 SHA256，使用系统 C# 编译器，输出 `dist/CodexUsageUI-1.2.2-Setup-x64.exe` 和 `SHA256SUMS.txt`。无需 npm 依赖或外部安装器编译工具。
+构建脚本从 Node.js 官方站下载固定版本并核对 SHA-256，使用系统 C# 编译器，输出 `dist/CodexUsageUI-版本-Setup-x64.exe` 和 `SHA256SUMS.txt`。传入 `-Version 1.2.3` 可指定主程序和安装包的共同版本，`-AppOnly` 可只构建主程序。
+
+在主分支提升 `build.ps1` 中的默认版本，或推送 `v主版本.次版本.修订版本` 标签后，GitHub Actions 会构建、测试并发布对应的 GitHub Release。已有发行版会保留原有附件。客户端从正式发行版读取安装包的名称、大小及 GitHub 提供的 SHA-256。
 
 Node 单元测试（构建后可使用随包运行时）：
 
@@ -51,7 +57,7 @@ Node 单元测试（构建后可使用随包运行时）：
 .\.build\app\runtime\node.exe --test tests\*.test.cjs
 ```
 
-C# 原生浮层、DPI 和统计测试入口见源码中的 `--overlay-test`、`--dpi-test`、`--statistics-test` 参数；自检使用合成数据，不操作真实 Codex 窗口。
+C# 原生浮层、DPI、统计和更新检测测试入口见源码中的 `--overlay-test`、`--dpi-test`、`--statistics-test`、`--update-test` 参数。安装包构建完毕后，可运行 `./tests/update-install.ps1 -InstallerPath ./dist/CodexUsageUI-1.2.3-Setup-x64.exe` 验证更新写入、回滚和本地数据保留。自检使用合成数据。
 
 ## 致谢与许可证
 
